@@ -12,8 +12,8 @@ if (!groqApiKey) {
 
 const groq = new Groq({ apiKey: groqApiKey });
 
-const INTENT_MODEL = process.env.GROQ_INTENT_MODEL || 'llama-3.1-8b-instant';
-const SMALLTALK_MODEL = process.env.GROQ_SMALLTALK_MODEL || 'llama-3.1-8b-instant';
+const INTENT_MODEL = process.env.GROQ_INTENT_MODEL || 'openai/gpt-oss-20b';
+const SMALLTALK_MODEL = process.env.GROQ_SMALLTALK_MODEL || 'openai/gpt-oss-20b';
 
 const INTENTS = {
     ADD_TASK: 'add_task',
@@ -74,22 +74,127 @@ async function authenticateUser(
 
 // Detect intent using Groq
 async function detectIntent(message: string): Promise<Intent> {
-    const prompt = `Classify the following user message into one of these intents: ${Object.values(INTENTS).join(', ')}. Return only the intent name.
-
-Message: "${message}"`;
+    const systemContent = `Classify the following user message into one of these intents: ${Object.values(INTENTS).join(', ')}.`;
+    const jsonSchema = {
+        name: 'intent_detection',
+        schema: {
+            type: 'object',
+            properties: {
+                intent: {
+                    type: 'string',
+                    enum: Object.values(INTENTS),
+                },
+            },
+            required: ['intent'],
+            additionalProperties: false,
+        },
+    };
 
     const response = await groq.chat.completions.create({
         model: INTENT_MODEL,
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 20,
+        messages: [
+            { role: 'system', content: systemContent },
+            { role: 'user', content: message },
+        ],
+        response_format: {
+            type: 'json_schema',
+            json_schema: jsonSchema,
+        },
         temperature: 0,
-    });
+    } as any);
 
-    const intent = response.choices[0]?.message?.content?.trim().toLowerCase();
-    if (Object.values(INTENTS).includes(intent as Intent)) {
-        return intent as Intent;
+    const content = response.choices[0]?.message?.content;
+    if (!content) return INTENTS.SMALLTALK;
+
+    try {
+        const parsedContent = JSON.parse(content);
+        const intent = parsedContent.intent?.trim().toLowerCase();
+        if (Object.values(INTENTS).includes(intent as Intent)) {
+            return intent as Intent;
+        }
+    } catch (error) {
+        console.error('Failed to parse JSON from Groq for intent detection:', error);
     }
     return INTENTS.SMALLTALK; // default
+}
+
+// Extract parameters using Groq
+export async function extractParameters(
+    intent: Intent,
+    message: string
+): Promise<Record<string, any>> {
+    let systemContent = '';
+    let jsonSchema: any;
+
+    switch (intent) {
+        case INTENTS.ADD_TASK:
+            systemContent = 'Extract the task content and optional due date from the message.';
+            jsonSchema = {
+                name: 'add_task_params',
+                schema: {
+                    type: 'object',
+                    properties: {
+                        content: { type: 'string' },
+                        due_date: { type: 'string', nullable: true },
+                    },
+                    required: ['content'],
+                    additionalProperties: false,
+                },
+            };
+            break;
+        case INTENTS.DELETE_TASK:
+            systemContent = 'Extract the task ID to delete from the message.';
+            jsonSchema = {
+                name: 'delete_task_params',
+                schema: {
+                    type: 'object',
+                    properties: {
+                        task_id: { type: 'number' },
+                    },
+                    required: ['task_id'],
+                    additionalProperties: false,
+                },
+            };
+            break;
+        case INTENTS.REFLECT_JOURNAL:
+            systemContent = 'Extract the journal content from the message.';
+            jsonSchema = {
+                name: 'reflect_journal_params',
+                schema: {
+                    type: 'object',
+                    properties: {
+                        content: { type: 'string' },
+                    },
+                    required: ['content'],
+                    additionalProperties: false,
+                },
+            };
+            break;
+        default:
+            return {};
+    }
+
+    const response = await groq.chat.completions.create({
+        model: INTENT_MODEL,
+        messages: [
+            { role: 'system', content: systemContent },
+            { role: 'user', content: message },
+        ],
+        response_format: {
+            type: 'json_schema',
+            json_schema: jsonSchema,
+        },
+        temperature: 0,
+    } as any);
+
+    const content = response.choices[0]?.message?.content;
+    if (!content) return {};
+    try {
+        return JSON.parse(content);
+    } catch (error) {
+        console.error('Failed to parse JSON from Groq:', error);
+        return {};
+    }
 }
 
 // CRUD functions for tasks
@@ -140,12 +245,11 @@ async function reflectJournal(userId: string, content: string): Promise<{ id: nu
 // Generate AI reply for smalltalk
 async function generateSmalltalkReply(message: string, profile?: UserProfile): Promise<string> {
     const userName = profile?.first_name ? ` ${profile.first_name}` : '';
-    const prompt = `Respond naturally and helpfully as a friendly AI assistant${userName ? ` to ${userName}` : ''}: "${message}"`;
+    const prompt = `Respond naturally and helpfully as a friendly AI assistant in very very less words ${userName ? ` to ${userName}` : ''}: "${message}"`;
 
     const response = await groq.chat.completions.create({
         model: SMALLTALK_MODEL,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 200,
         temperature: 0.7,
     });
 
@@ -174,15 +278,15 @@ async function handleMessage(
     profile?: UserProfile
 ): Promise<SendMessageResponse> {
     const intent = await detectIntent(message);
+    console.log(`Detected intent: ${intent}`);
+    const params = await extractParameters(intent, message);
 
     switch (intent) {
         case INTENTS.ADD_TASK: {
-            // Parse task content and due date from message
-            const taskMatch = message.match(/add task (.+?)(?: due (.+))?/i);
-            const content = taskMatch ? taskMatch[1] : message.replace(/add task/i, '').trim();
-            const dueDate = taskMatch?.[2];
-            const { id } = await addTask(userId, content, dueDate);
-            const reply = `Task added: "${content}"${dueDate ? ` due ${dueDate}` : ''}`;
+            const { content, due_date } = params;
+            const taskContent = content || message.replace(/add task/i, '').trim();
+            const { id } = await addTask(userId, taskContent, due_date);
+            const reply = `Task added: "${taskContent}"${due_date ? ` due ${due_date}` : ''}`;
             return { reply, optional_data: { task_id: id } };
         }
         case INTENTS.LIST_TASKS: {
@@ -193,17 +297,17 @@ async function handleMessage(
             return { reply, optional_data: { tasks } };
         }
         case INTENTS.DELETE_TASK: {
-            const taskMatch = message.match(/delete task (\d+)/i);
-            const taskId = taskMatch ? parseInt(taskMatch[1]) : null;
-            if (!taskId) {
+            const { task_id } = params;
+            if (!task_id) {
                 return { reply: 'Please specify a task ID to delete, e.g., "delete task 1"' };
             }
-            await deleteTask(userId, taskId);
-            return { reply: `Task ${taskId} deleted.` };
+            await deleteTask(userId, task_id);
+            return { reply: `Task ${task_id} deleted.` };
         }
         case INTENTS.REFLECT_JOURNAL: {
-            const content = message.replace(/reflect journal/i, '').trim() || message;
-            const { id } = await reflectJournal(userId, content);
+            const { content } = params;
+            const journalContent = content || message;
+            const { id } = await reflectJournal(userId, journalContent);
             const reply = 'Journal entry added.';
             return { reply, optional_data: { journal_id: id } };
         }
@@ -255,4 +359,5 @@ router.post('/send-message', async (req: Request, res: Response) => {
     }
 });
 
+export { detectIntent, INTENTS };
 export default router;

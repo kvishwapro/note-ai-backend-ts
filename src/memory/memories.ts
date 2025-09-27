@@ -39,7 +39,7 @@ async function embed(text: string): Promise<number[]> {
         throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
     }
 
-    const data = await response.json() as OllamaEmbeddingResponse;
+    const data = (await response.json()) as OllamaEmbeddingResponse;
     const vector = data.embedding;
 
     if (!vector || vector.length !== DIMENSIONS) {
