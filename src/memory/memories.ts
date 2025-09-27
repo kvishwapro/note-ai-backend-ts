@@ -1,15 +1,12 @@
-import Groq from 'groq-sdk';
 import { supabase } from '../config/supabase';
 
-const GROQ_MODEL = 'nomic-embed-text';
+const OLLAMA_MODEL = 'nomic-embed-text';
 const DIMENSIONS = 768;
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
-const groqApiKey = process.env.GROQ_API_KEY;
-if (!groqApiKey) {
-    throw new Error('Missing GROQ_API_KEY');
+interface OllamaEmbeddingResponse {
+    embedding: number[];
 }
-
-const groq = new Groq({ apiKey: groqApiKey });
 
 export type MatchMemoriesRow = {
     id: number;
@@ -21,18 +18,30 @@ export type MatchMemoriesRow = {
 };
 
 /**
- * Generate an embedding for text using Groq (nomic-embed-text, 768 dims)
+ * Generate an embedding for text using Ollama (nomic-embed-text, 768 dims)
  */
 async function embed(text: string): Promise<number[]> {
     const trimmed = text?.trim();
     if (!trimmed) throw new Error('Text for embedding is empty');
 
-    const response = await groq.embeddings.create({
-        model: GROQ_MODEL,
-        input: trimmed,
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            model: OLLAMA_MODEL,
+            prompt: trimmed,
+        }),
     });
 
-    const vector = response.data?.[0]?.embedding as unknown as number[] | undefined;
+    if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json() as OllamaEmbeddingResponse;
+    const vector = data.embedding;
+
     if (!vector || vector.length !== DIMENSIONS) {
         throw new Error(
             `Invalid embedding vector. Expected ${DIMENSIONS}, got ${vector?.length ?? 0}`

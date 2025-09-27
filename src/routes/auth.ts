@@ -18,6 +18,7 @@ interface LoginRequest {
 
 // Signup endpoint
 router.post('/signup', async (req: Request, res: Response) => {
+    console.log('Received signup request:', req.body);
     try {
         const { email, password, firstName, lastName }: SignupRequest = req.body;
 
