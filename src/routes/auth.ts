@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { createClient } from '@supabase/supabase-js';
 import { supabase } from '../config/supabase';
 
 const router = Router();
@@ -18,6 +19,7 @@ interface LoginRequest {
 
 // Signup endpoint
 router.post('/signup', async (req: Request, res: Response) => {
+    console.log('Received signup request:', req.body);
     try {
         const { email, password, firstName, lastName }: SignupRequest = req.body;
 
@@ -184,10 +186,30 @@ router.post('/logout', async (req: Request, res: Response) => {
 // Get current user endpoint
 router.get('/me', async (req: Request, res: Response) => {
     try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({
+                error: 'Not authenticated',
+            });
+        }
+
+        const token = authHeader.substring(7);
+
+        const supabaseUrl = process.env.SUPABASE_URL!;
+        const supabaseAnonKey = process.env.SUPABASE_ANON_KEY!;
+
+        const supabaseWithToken = createClient(supabaseUrl, supabaseAnonKey, {
+            global: {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            },
+        });
+
         const {
             data: { user },
             error,
-        } = await supabase.auth.getUser();
+        } = await supabaseWithToken.auth.getUser();
 
         if (error) {
             console.error('Get user error:', error);

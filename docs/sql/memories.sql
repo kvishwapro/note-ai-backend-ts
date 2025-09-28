@@ -6,7 +6,8 @@ create table if not exists public.memories (
   id bigserial primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   content text not null,
-  embedding vector(1536) not null,
+  role text not null check (role in ('user', 'ai')),
+  embedding vector(768) not null,
   created_at timestamptz not null default now()
 );
 
@@ -17,7 +18,7 @@ create index if not exists idx_memories_user_created_at
 -- 3) Similarity search function using pgvector cosine distance operator <=>
 -- Returns similarity as (1 - distance) so higher is more similar in [0..1].
 create or replace function public.match_memories(
-  query_embedding vector(1536),
+  query_embedding vector(768),
   match_threshold float,
   match_count int,
   target_user_id uuid
@@ -25,8 +26,9 @@ create or replace function public.match_memories(
 returns table (
   id bigint,
   user_id uuid,
+  role: text,
   content text,
-  embedding vector(1536),
+  embedding vector(768),
   created_at timestamptz,
   similarity float
 )
@@ -36,6 +38,7 @@ as $$
   select
     m.id,
     m.user_id,
+    m.role,
     m.content,
     m.embedding,
     m.created_at,
@@ -56,7 +59,7 @@ $$;
 --   for insert with check (auth.uid() = user_id);
 
 -- Notes:
--- - Embedding dimension is 1536 to match OpenAI text-embedding-3-small.
+-- - Embedding dimension is 768 to match Groq "nomic-embed-text".
 -- - If you later adopt an ANN index (IVFFlat) for scale, consider:
 --   create index if not exists idx_memories_embedding
 --   on public.memories using ivfflat (embedding vector_cosine_ops)
