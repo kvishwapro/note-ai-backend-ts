@@ -1,19 +1,14 @@
 import { Router, Request, Response } from 'express';
-import Groq from 'groq-sdk';
+import ollama from 'ollama';
+import { z } from 'zod';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import { supabaseAdmin } from '../config/supabase';
 import { storeMemory } from '../memory/memories';
 
 const router = Router();
 
-const groqApiKey = process.env.GROQ_API_KEY;
-if (!groqApiKey) {
-    throw new Error('Missing GROQ_API_KEY');
-}
-
-const groq = new Groq({ apiKey: groqApiKey });
-
-const INTENT_MODEL = process.env.GROQ_INTENT_MODEL || 'openai/gpt-oss-20b';
-const SMALLTALK_MODEL = process.env.GROQ_SMALLTALK_MODEL || 'openai/gpt-oss-20b';
+const INTENT_MODEL = process.env.OLLAMA_INTENT_MODEL || 'llama3.2:latest';
+const SMALLTALK_MODEL = process.env.OLLAMA_SMALLTALK_MODEL || 'llama3.2:latest';
 
 const INTENTS = {
     ADD_TASK: 'add_task',
@@ -72,48 +67,38 @@ async function authenticateUser(
     }
 }
 
-// Detect intent using Groq
+// Detect intent using Ollama with Zod
 async function detectIntent(message: string): Promise<Intent> {
-    const systemContent = `Classify the following user message into one of these intents: ${Object.values(INTENTS).join(', ')}.`;
-    const jsonSchema = {
-        name: 'intent_detection',
-        schema: {
-            type: 'object',
-            properties: {
-                intent: {
-                    type: 'string',
-                    enum: Object.values(INTENTS),
-                },
-            },
-            required: ['intent'],
-            additionalProperties: false,
-        },
-    };
+    const intentSchema = z.object({
+        intent: z.enum(Object.values(INTENTS) as [string, ...string[]]),
+    });
 
-    const response = await groq.chat.completions.create({
+    const schema = zodToJsonSchema(intentSchema);
+
+    const systemContent = `Classify the following user message into one of these intents: ${Object.values(INTENTS).join(', ')}. Your response MUST be a JSON object that adheres to the provided schema.`;
+
+    const response = await ollama.chat({
         model: INTENT_MODEL,
         messages: [
             { role: 'system', content: systemContent },
             { role: 'user', content: message },
         ],
-        response_format: {
-            type: 'json_schema',
-            json_schema: jsonSchema,
-        },
-        temperature: 0,
-    } as any);
+        format: schema as any,
+    });
 
-    const content = response.choices[0]?.message?.content;
+    const content = response.message.content;
     if (!content) return INTENTS.SMALLTALK;
 
     try {
         const parsedContent = JSON.parse(content);
-        const intent = parsedContent.intent?.trim().toLowerCase();
-        if (Object.values(INTENTS).includes(intent as Intent)) {
-            return intent as Intent;
+        const validated = intentSchema.safeParse(parsedContent);
+        if (validated.success) {
+            return validated.data.intent as Intent;
+        } else {
+            console.error('Zod validation failed for intent detection:', validated.error);
         }
     } catch (error) {
-        console.error('Failed to parse JSON from Groq for intent detection:', error);
+        console.error('Failed to parse JSON from Ollama for intent detection:', error);
     }
     return INTENTS.SMALLTALK; // default
 }
@@ -123,78 +108,70 @@ export async function extractParameters(
     intent: Intent,
     message: string
 ): Promise<Record<string, any>> {
+    let zodSchema: z.ZodObject<any>;
     let systemContent = '';
-    let jsonSchema: any;
 
     switch (intent) {
-        case INTENTS.ADD_TASK:
-            systemContent = 'Extract the task content and optional due date from the message.';
-            jsonSchema = {
-                name: 'add_task_params',
-                schema: {
-                    type: 'object',
-                    properties: {
-                        content: { type: 'string' },
-                        due_date: { type: 'string', nullable: true },
-                    },
-                    required: ['content'],
-                    additionalProperties: false,
-                },
-            };
+        case INTENTS.ADD_TASK: {
+            zodSchema = z.object({
+                content: z.string(),
+                due_date: z.string().optional(),
+            });
+            systemContent =
+                'Extract the task content and optional due date from the message. Your response MUST be a JSON object that adheres to the provided schema.';
             break;
-        case INTENTS.DELETE_TASK:
-            systemContent = 'Extract the task ID to delete from the message.';
-            jsonSchema = {
-                name: 'delete_task_params',
-                schema: {
-                    type: 'object',
-                    properties: {
-                        task_id: { type: 'number' },
-                    },
-                    required: ['task_id'],
-                    additionalProperties: false,
-                },
-            };
+        }
+        case INTENTS.DELETE_TASK: {
+            zodSchema = z.object({
+                task_id: z.number(),
+            });
+            systemContent =
+                'Extract the task ID to delete from the message. Your response MUST be a JSON object that adheres to the provided schema.';
             break;
-        case INTENTS.REFLECT_JOURNAL:
-            systemContent = 'Extract the journal content from the message.';
-            jsonSchema = {
-                name: 'reflect_journal_params',
-                schema: {
-                    type: 'object',
-                    properties: {
-                        content: { type: 'string' },
-                    },
-                    required: ['content'],
-                    additionalProperties: false,
-                },
-            };
+        }
+        case INTENTS.REFLECT_JOURNAL: {
+            zodSchema = z.object({
+                content: z.string(),
+            });
+            systemContent =
+                'Extract the journal content from the message. Your response MUST be a JSON object that adheres to the provided schema.';
             break;
+        }
         default:
             return {};
     }
 
-    const response = await groq.chat.completions.create({
+    const schema = zodToJsonSchema(zodSchema);
+
+    const response = await ollama.chat({
         model: INTENT_MODEL,
         messages: [
             { role: 'system', content: systemContent },
             { role: 'user', content: message },
         ],
-        response_format: {
-            type: 'json_schema',
-            json_schema: jsonSchema,
-        },
-        temperature: 0,
-    } as any);
+        format: schema as any,
+    });
 
-    const content = response.choices[0]?.message?.content;
+    const content = response.message.content;
     if (!content) return {};
     try {
-        return JSON.parse(content);
+        const parsedContent = JSON.parse(content);
+        const validated = zodSchema.safeParse(parsedContent);
+        if (validated.success) {
+            return validated.data;
+        } else {
+            console.error(
+                `Zod validation failed for ${intent} parameter extraction:`,
+                validated.error
+            );
+        }
     } catch (error) {
-        console.error('Failed to parse JSON from Groq:', error);
-        return {};
+        console.error(
+            `Failed to parse JSON from Ollama for ${intent} parameter extraction:`,
+            error
+        );
     }
+    return {};
 }
 
 // CRUD functions for tasks
@@ -247,15 +224,12 @@ async function generateSmalltalkReply(message: string, profile?: UserProfile): P
     const userName = profile?.first_name ? ` ${profile.first_name}` : '';
     const prompt = `Respond naturally and helpfully as a friendly AI assistant in very very less words ${userName ? ` to ${userName}` : ''}: "${message}"`;
 
-    const response = await groq.chat.completions.create({
+    const response = await ollama.chat({
         model: SMALLTALK_MODEL,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7,
     });
 
-    return (
-        response.choices[0]?.message?.content?.trim() || "Sorry, I couldn't generate a response."
-    );
+    return response.message.content?.trim() || "Sorry, I couldn't generate a response.";
 }
 
 // Handle complex intents (placeholder)

@@ -21,12 +21,14 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // Import routes
 import authRoutes from './routes/auth';
 import chatRoutes from './routes/chat';
+import taskRoutes from './routes/task.route';
 import { errorHandler } from './middleware/errorHandler';
 import { notFoundHandler } from './middleware/notFoundHandler';
 
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api', chatRoutes);
+app.use('/api/tasks', taskRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

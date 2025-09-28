@@ -23,7 +23,10 @@
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "groq-sdk": "^0.7.0",
-    "helmet": "^8.1.0"
+    "helmet": "^8.1.0",
+    "ollama": "^0.5.18",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
