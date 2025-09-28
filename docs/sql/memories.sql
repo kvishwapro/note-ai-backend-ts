@@ -6,6 +6,7 @@ create table if not exists public.memories (
   id bigserial primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   content text not null,
+  role text not null check (role in ('user', 'ai')),
   embedding vector(768) not null,
   created_at timestamptz not null default now()
 );
@@ -25,6 +26,7 @@ create or replace function public.match_memories(
 returns table (
   id bigint,
   user_id uuid,
+  role: text,
   content text,
   embedding vector(768),
   created_at timestamptz,
@@ -36,6 +38,7 @@ as $$
   select
     m.id,
     m.user_id,
+    m.role,
     m.content,
     m.embedding,
     m.created_at,

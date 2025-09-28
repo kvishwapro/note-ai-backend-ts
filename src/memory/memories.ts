@@ -1,4 +1,4 @@
-import { supabase } from '../config/supabase';
+import { supabaseAdmin } from '../config/supabase';
 
 const OLLAMA_MODEL = 'nomic-embed-text';
 const DIMENSIONS = 768;
@@ -12,6 +12,7 @@ export type MatchMemoriesRow = {
     id: number;
     user_id: string;
     content: string;
+    role: 'user' | 'ai';
     embedding: number[]; // Supabase returns vector as number[]
     created_at: string; // ISO string
     similarity: number; // 0..1, higher is better
@@ -53,19 +54,25 @@ async function embed(text: string): Promise<number[]> {
 /**
  * Store a memory for a user by generating an embedding and inserting into public.memories
  */
-export async function storeMemory(userId: string, text: string): Promise<{ id: number }> {
+export async function storeMemory(
+    userId: string,
+    text: string,
+    role: 'user' | 'ai'
+): Promise<{ id: number }> {
     if (!userId) throw new Error('userId is required');
     if (!text?.trim()) throw new Error('text is required');
+    if (!role || !['user', 'ai'].includes(role)) throw new Error('role must be "user" or "ai"');
 
     const embedding = await embed(text);
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin!
         .from('memories')
         .insert([
             {
                 user_id: userId,
                 content: text,
-                embedding, // pgvector serialized from number[]
+                role,
+                embedding, // pgvector serialized from number[],
             },
         ])
         .select('id')
@@ -97,7 +104,7 @@ export async function searchMemories(
     const queryEmbedding = await embed(query);
 
     // SQL: match_memories(query_embedding, match_threshold, match_count, target_user_id)
-    const { data, error } = await supabase.rpc('match_memories', {
+    const { data, error } = await supabaseAdmin!.rpc('match_memories', {
         query_embedding: queryEmbedding as unknown as number[],
         match_threshold: threshold,
         match_count: count,

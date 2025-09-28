@@ -1,4 +1,4 @@
-import { detectIntent, INTENTS } from './chat';
+import { detectIntent, INTENTS } from '../routes/chat';
 
 describe('Intent detection', () => {
     const testCases = {
