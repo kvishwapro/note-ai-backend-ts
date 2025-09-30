@@ -18,6 +18,13 @@ export type MatchMemoriesRow = {
     similarity: number; // 0..1, higher is better
 };
 
+export type ConversationMessage = {
+    id: number;
+    content: string;
+    role: 'user' | 'ai';
+    created_at: string;
+};
+
 /**
  * Generate an embedding for text using Ollama (nomic-embed-text, 768 dims)
  */
@@ -116,4 +123,29 @@ export async function searchMemories(
     }
 
     return (data as MatchMemoriesRow[]) ?? [];
+}
+
+/**
+ * Get the last N messages for a user by chronological order (most recent first)
+ * Used for conversation context without embeddings
+ */
+export async function getRecentMessages(
+    userId: string,
+    limit: number = 30
+): Promise<ConversationMessage[]> {
+    if (!userId) throw new Error('userId is required');
+
+    const { data, error } = await supabaseAdmin!
+        .from('memories')
+        .select('id, content, role, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+    if (error) {
+        throw new Error(`Failed to get recent messages: ${error.message}`);
+    }
+
+    // Reverse to get chronological order (oldest first)
+    return (data as ConversationMessage[]).reverse();
 }

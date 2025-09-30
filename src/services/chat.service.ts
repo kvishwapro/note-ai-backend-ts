@@ -2,6 +2,7 @@ import ollama from 'ollama';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { supabaseAdmin } from '../config/supabase';
+import { getRecentMessages } from '../memory/memories';
 
 const INTENT_MODEL = process.env.OLLAMA_INTENT_MODEL || 'llama3.2:latest';
 const SMALLTALK_MODEL = process.env.OLLAMA_SMALLTALK_MODEL || 'llama3.2:latest';
@@ -211,13 +212,28 @@ async function reflectJournal(userId: string, content: string): Promise<{ id: nu
 }
 
 // Generate AI reply for smalltalk
-async function generateSmalltalkReply(message: string, profile?: UserProfile): Promise<string> {
+async function generateSmalltalkReply(
+    message: string,
+    conversationHistory: Array<{ role: 'user' | 'ai'; content: string }>,
+    profile?: UserProfile
+): Promise<string> {
     const userName = profile?.first_name ? ` ${profile.first_name}` : '';
-    const prompt = `Respond naturally and helpfully as a friendly AI assistant in very very less words ${userName ? ` to ${userName}` : ''}: "${message}"`;
+
+    // Build messages array with conversation history
+    const messages = [
+        ...conversationHistory.map(msg => ({
+            role: msg.role === 'ai' ? 'assistant' : 'user',
+            content: msg.content,
+        })),
+        {
+            role: 'user' as const,
+            content: `Respond naturally and helpfully as a friendly AI assistant in very very less words ${userName ? ` to ${userName}` : ''}: "${message}"`,
+        },
+    ];
 
     const response = await ollama.chat({
         model: SMALLTALK_MODEL,
-        messages: [{ role: 'user', content: prompt }],
+        messages,
     });
 
     return response.message.content?.trim() || "Sorry, I couldn't generate a response.";
@@ -242,6 +258,9 @@ export async function handleMessage(
     message: string,
     profile?: UserProfile
 ): Promise<SendMessageResponse> {
+    // Get conversation history for context (last 30 messages)
+    const conversationHistory = await getRecentMessages(userId, 30);
+
     const intent = await detectIntent(message);
     console.log(`Detected intent: ${intent}`);
     const params = await extractParameters(intent, message);
@@ -277,7 +296,15 @@ export async function handleMessage(
             return { reply, optional_data: { journal_id: id } };
         }
         case INTENTS.SMALLTALK: {
-            const reply = await generateSmalltalkReply(message, profile);
+            // Transform conversation history to the format needed for AI prompts
+            const historyForAI = conversationHistory.map(msg => ({
+                role: msg.role,
+                content: msg.content,
+            }));
+
+            console.log(historyForAI);
+
+            const reply = await generateSmalltalkReply(message, historyForAI, profile);
             return { reply };
         }
         default: {
@@ -290,7 +317,7 @@ export async function handleLoadMessage(userId: string): Promise<SendMessageResp
         .from('memories')
         .select('id, content, role, created_at')
         .eq('user_id', userId)
-        .order('created_at', { ascending: false })
+        .order('created_at', { ascending: true })
         .limit(100);
 
     if (error) {
