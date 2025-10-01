@@ -29,10 +29,29 @@ export const getTaskById = async (req: Request, res: Response) => {
 };
 
 export const createTask = async (req: Request, res: Response) => {
-    const { title, description } = req.body;
+    const {
+        title,
+        description,
+        duration_minutes,
+        priority = 'P2',
+        labels = [],
+        notes,
+        status = 'open',
+    } = req.body;
     const { data, error } = await supabaseAdmin!
         .from('tasks')
-        .insert([{ title, description, completed: false }])
+        .insert([
+            {
+                title,
+                description,
+                completed: false,
+                duration_minutes,
+                priority,
+                labels,
+                notes,
+                status,
+            },
+        ])
         .select()
         .single();
     if (error) {
@@ -43,10 +62,20 @@ export const createTask = async (req: Request, res: Response) => {
 };
 
 export const updateTask = async (req: Request, res: Response) => {
-    const { title, description, completed } = req.body;
+    const { title, description, completed, duration_minutes, priority, labels, notes, status } =
+        req.body;
     const { data, error } = await supabaseAdmin!
         .from('tasks')
-        .update({ title, description, completed })
+        .update({
+            title,
+            description,
+            completed,
+            duration_minutes,
+            priority,
+            labels,
+            notes,
+            status,
+        })
         .eq('id', req.params.id)
         .select()
         .single();
