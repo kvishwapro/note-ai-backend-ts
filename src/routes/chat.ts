@@ -29,6 +29,8 @@ router.post('/send-message', async (req: Request, res: Response) => {
         // Handle message
         const response = await handleMessage(user_id, message, profile);
 
+        console.log(response);
+
         // Store user message in vector DB
         try {
             await storeMemory(user_id, message, 'user');

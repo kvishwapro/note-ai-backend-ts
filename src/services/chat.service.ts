@@ -2,6 +2,8 @@ import OpenAI from 'openai';
 import { supabaseAdmin } from '../config/supabase';
 import { getRecentMessages } from '../memory/memories';
 import { AI_TOOLS } from '../config/tools';
+import { AIService } from './ai.service';
+import { RESPONSE_FORMAT } from '../config/format';
 
 interface ToolCall {
     id: string;
@@ -560,15 +562,32 @@ export async function handleMessage(
                 });
             });
 
-            // Get final response from model
-            const finalCompletion = await client.chat.completions.create({
-                model: INTENT_MODEL,
-                messages,
-                temperature: 0.7,
-            });
+            const aiService = new AIService();
+
+            const firstToolCall = responseMessage.tool_calls[0];
+
+            let toolName: string;
+            if ('function' in firstToolCall) {
+                toolName = firstToolCall.function.name;
+            } else {
+                toolName = (firstToolCall as any).name || 'create_task';
+            }
+
+            let validToolName = toolName as keyof typeof RESPONSE_FORMAT;
+            if (!RESPONSE_FORMAT[validToolName]) {
+                console.error(`Unknown tool name: ${toolName}`);
+                validToolName = 'list_tasks';
+            }
+
+            console.log(`Using tool name for structured output: ${validToolName}`);
+
+            const finalCompletion = await aiService.structured_output(
+                messages.map(m => m.content).join('\n'),
+                validToolName
+            );
 
             return {
-                reply: finalCompletion.choices[0]?.message?.content || 'Action completed.',
+                reply: finalCompletion || 'Action completed.',
                 optional_data: { tool_results: toolResults },
             };
         } else {
